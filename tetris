@@ -1,0 +1,333 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { RotateCw, Play, Pause } from 'lucide-react';
+
+const BOARD_WIDTH = 10;
+const BOARD_HEIGHT = 20;
+const CELL_SIZE = 30;
+
+const SHAPES = {
+  I: [[1, 1, 1, 1]],
+  O: [[1, 1], [1, 1]],
+  T: [[0, 1, 0], [1, 1, 1]],
+  S: [[0, 1, 1], [1, 1, 0]],
+  Z: [[1, 1, 0], [0, 1, 1]],
+  J: [[1, 0, 0], [1, 1, 1]],
+  L: [[0, 0, 1], [1, 1, 1]]
+};
+
+const COLORS = {
+  I: '#00f0f0',
+  O: '#f0f000',
+  T: '#a000f0',
+  S: '#00f000',
+  Z: '#f00000',
+  J: '#0000f0',
+  L: '#f0a000'
+};
+
+const createEmptyBoard = () => 
+  Array.from({ length: BOARD_HEIGHT }, () => Array(BOARD_WIDTH).fill(0));
+
+const TetrisGame = () => {
+  const [board, setBoard] = useState(createEmptyBoard());
+  const [currentPiece, setCurrentPiece] = useState(null);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [score, setScore] = useState(0);
+  const [gameOver, setGameOver] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [level, setLevel] = useState(1);
+
+  const getRandomPiece = () => {
+    const shapes = Object.keys(SHAPES);
+    const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
+    return {
+      shape: SHAPES[randomShape],
+      type: randomShape
+    };
+  };
+
+  const checkCollision = useCallback((piece, pos, boardState) => {
+    if (!piece) return true;
+    
+    for (let y = 0; y < piece.shape.length; y++) {
+      for (let x = 0; x < piece.shape[y].length; x++) {
+        if (piece.shape[y][x]) {
+          const newX = pos.x + x;
+          const newY = pos.y + y;
+          
+          if (newX < 0 || newX >= BOARD_WIDTH || newY >= BOARD_HEIGHT) {
+            return true;
+          }
+          if (newY >= 0 && boardState[newY][newX]) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }, []);
+
+  const mergePiece = useCallback(() => {
+    const newBoard = board.map(row => [...row]);
+    
+    currentPiece.shape.forEach((row, y) => {
+      row.forEach((cell, x) => {
+        if (cell) {
+          const boardY = position.y + y;
+          const boardX = position.x + x;
+          if (boardY >= 0) {
+            newBoard[boardY][boardX] = currentPiece.type;
+          }
+        }
+      });
+    });
+    
+    return newBoard;
+  }, [board, currentPiece, position]);
+
+  const clearLines = useCallback((boardState) => {
+    let linesCleared = 0;
+    const newBoard = boardState.filter(row => {
+      const isFull = row.every(cell => cell !== 0);
+      if (isFull) linesCleared++;
+      return !isFull;
+    });
+    
+    while (newBoard.length < BOARD_HEIGHT) {
+      newBoard.unshift(Array(BOARD_WIDTH).fill(0));
+    }
+    
+    if (linesCleared > 0) {
+      setScore(prev => prev + linesCleared * 100 * level);
+      if (score > 0 && score % 1000 < linesCleared * 100 * level) {
+        setLevel(prev => prev + 1);
+      }
+    }
+    
+    return newBoard;
+  }, [level, score]);
+
+  const spawnPiece = useCallback(() => {
+    const piece = getRandomPiece();
+    const startX = Math.floor(BOARD_WIDTH / 2) - Math.floor(piece.shape[0].length / 2);
+    const startPos = { x: startX, y: 0 };
+    
+    if (checkCollision(piece, startPos, board)) {
+      setGameOver(true);
+      return;
+    }
+    
+    setCurrentPiece(piece);
+    setPosition(startPos);
+  }, [board, checkCollision]);
+
+  const moveDown = useCallback(() => {
+    if (!currentPiece || isPaused || gameOver) return;
+    
+    const newPos = { ...position, y: position.y + 1 };
+    
+    if (checkCollision(currentPiece, newPos, board)) {
+      const merged = mergePiece();
+      const cleared = clearLines(merged);
+      setBoard(cleared);
+      spawnPiece();
+    } else {
+      setPosition(newPos);
+    }
+  }, [currentPiece, position, board, checkCollision, mergePiece, clearLines, spawnPiece, isPaused, gameOver]);
+
+  const moveHorizontal = (direction) => {
+    if (!currentPiece || isPaused || gameOver) return;
+    
+    const newPos = { ...position, x: position.x + direction };
+    if (!checkCollision(currentPiece, newPos, board)) {
+      setPosition(newPos);
+    }
+  };
+
+  const rotate = () => {
+    if (!currentPiece || isPaused || gameOver) return;
+    
+    const rotated = currentPiece.shape[0].map((_, i) =>
+      currentPiece.shape.map(row => row[i]).reverse()
+    );
+    
+    const rotatedPiece = { ...currentPiece, shape: rotated };
+    
+    if (!checkCollision(rotatedPiece, position, board)) {
+      setCurrentPiece(rotatedPiece);
+    }
+  };
+
+  const hardDrop = () => {
+    if (!currentPiece || isPaused || gameOver) return;
+    
+    let newPos = { ...position };
+    while (!checkCollision(currentPiece, { ...newPos, y: newPos.y + 1 }, board)) {
+      newPos.y++;
+    }
+    setPosition(newPos);
+    moveDown();
+  };
+
+  useEffect(() => {
+    if (!currentPiece && !gameOver) {
+      spawnPiece();
+    }
+  }, [currentPiece, gameOver, spawnPiece]);
+
+  useEffect(() => {
+    const speed = Math.max(200, 1000 - (level - 1) * 100);
+    const interval = setInterval(moveDown, speed);
+    return () => clearInterval(interval);
+  }, [moveDown, level]);
+
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      if (gameOver) return;
+      
+      switch (e.key) {
+        case 'ArrowLeft':
+          moveHorizontal(-1);
+          break;
+        case 'ArrowRight':
+          moveHorizontal(1);
+          break;
+        case 'ArrowDown':
+          moveDown();
+          break;
+        case 'ArrowUp':
+        case ' ':
+          rotate();
+          break;
+        case 'Enter':
+          hardDrop();
+          break;
+        case 'p':
+          setIsPaused(prev => !prev);
+          break;
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [moveDown, gameOver]);
+
+  const renderBoard = () => {
+    const displayBoard = board.map(row => [...row]);
+    
+    if (currentPiece) {
+      currentPiece.shape.forEach((row, y) => {
+        row.forEach((cell, x) => {
+          if (cell) {
+            const boardY = position.y + y;
+            const boardX = position.x + x;
+            if (boardY >= 0 && boardY < BOARD_HEIGHT && boardX >= 0 && boardX < BOARD_WIDTH) {
+              displayBoard[boardY][boardX] = currentPiece.type;
+            }
+          }
+        });
+      });
+    }
+    
+    return displayBoard;
+  };
+
+  const resetGame = () => {
+    setBoard(createEmptyBoard());
+    setCurrentPiece(null);
+    setScore(0);
+    setLevel(1);
+    setGameOver(false);
+    setIsPaused(false);
+  };
+
+  const displayBoard = renderBoard();
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4">
+      <div className="flex flex-col md:flex-row gap-6 items-start">
+        <div className="bg-black p-4 rounded-lg shadow-2xl">
+          <div className="grid gap-px" style={{
+            gridTemplateColumns: `repeat(${BOARD_WIDTH}, ${CELL_SIZE}px)`,
+            backgroundColor: '#111'
+          }}>
+            {displayBoard.map((row, y) =>
+              row.map((cell, x) => (
+                <div
+                  key={`${y}-${x}`}
+                  className="transition-colors duration-100"
+                  style={{
+                    width: CELL_SIZE,
+                    height: CELL_SIZE,
+                    backgroundColor: cell ? COLORS[cell] : '#1a1a2e',
+                    border: cell ? '2px solid rgba(255,255,255,0.3)' : '1px solid #0f0f23',
+                    boxShadow: cell ? 'inset 0 0 10px rgba(255,255,255,0.2)' : 'none'
+                  }}
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg shadow-2xl p-6 w-64">
+          <h1 className="text-3xl font-bold text-purple-900 mb-4">TETRIS</h1>
+          
+          <div className="mb-6 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-gray-700 font-semibold">Score:</span>
+              <span className="text-2xl font-bold text-purple-600">{score}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-700 font-semibold">Level:</span>
+              <span className="text-xl font-bold text-blue-600">{level}</span>
+            </div>
+          </div>
+
+          {gameOver && (
+            <div className="mb-4 p-4 bg-red-100 border-2 border-red-500 rounded-lg">
+              <p className="text-red-700 font-bold text-center">GAME OVER!</p>
+            </div>
+          )}
+
+          {isPaused && !gameOver && (
+            <div className="mb-4 p-4 bg-yellow-100 border-2 border-yellow-500 rounded-lg">
+              <p className="text-yellow-700 font-bold text-center">PAUSED</p>
+            </div>
+          )}
+
+          <div className="space-y-2 mb-6">
+            {!gameOver && (
+              <button
+                onClick={() => setIsPaused(!isPaused)}
+                className="w-full py-2 px-4 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition"
+              >
+                {isPaused ? <Play size={20} /> : <Pause size={20} />}
+                {isPaused ? 'Resume' : 'Pause'}
+              </button>
+            )}
+            <button
+              onClick={resetGame}
+              className="w-full py-2 px-4 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-semibold transition"
+            >
+              New Game
+            </button>
+          </div>
+
+          <div className="bg-gray-100 rounded-lg p-4 text-sm">
+            <h3 className="font-bold text-gray-800 mb-2">Controls:</h3>
+            <ul className="space-y-1 text-gray-700">
+              <li>← → Move</li>
+              <li>↓ Soft Drop</li>
+              <li>↑ / Space: Rotate</li>
+              <li>Enter: Hard Drop</li>
+              <li>P: Pause</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default TetrisGame;
