@@ -1,333 +1,377 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { RotateCw, Play, Pause } from 'lucide-react';
+import 'dart:async';
+import 'package:flutter/material.dart';
 
-const BOARD_WIDTH = 10;
-const BOARD_HEIGHT = 20;
-const CELL_SIZE = 30;
+void main() => runApp(const TetrisApp());
 
-const SHAPES = {
-  I: [[1, 1, 1, 1]],
-  O: [[1, 1], [1, 1]],
-  T: [[0, 1, 0], [1, 1, 1]],
-  S: [[0, 1, 1], [1, 1, 0]],
-  Z: [[1, 1, 0], [0, 1, 1]],
-  J: [[1, 0, 0], [1, 1, 1]],
-  L: [[0, 0, 1], [1, 1, 1]]
-};
+class TetrisApp extends StatelessWidget {
+  const TetrisApp({super.key});
 
-const COLORS = {
-  I: '#00f0f0',
-  O: '#f0f000',
-  T: '#a000f0',
-  S: '#00f000',
-  Z: '#f00000',
-  J: '#0000f0',
-  L: '#f0a000'
-};
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Tetris',
+      theme: ThemeData.dark().copyWith(
+        scaffoldBackgroundColor: const Color(0xFF0B1020),
+      ),
+      home: const TetrisPage(),
+    );
+  }
+}
 
-const createEmptyBoard = () => 
-  Array.from({ length: BOARD_HEIGHT }, () => Array(BOARD_WIDTH).fill(0));
+class TetrisPage extends StatefulWidget {
+  const TetrisPage({super.key});
 
-const TetrisGame = () => {
-  const [board, setBoard] = useState(createEmptyBoard());
-  const [currentPiece, setCurrentPiece] = useState(null);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [score, setScore] = useState(0);
-  const [gameOver, setGameOver] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [level, setLevel] = useState(1);
+  @override
+  State<TetrisPage> createState() => _TetrisPageState();
+}
 
-  const getRandomPiece = () => {
-    const shapes = Object.keys(SHAPES);
-    const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
-    return {
-      shape: SHAPES[randomShape],
-      type: randomShape
-    };
-  };
+class _TetrisPageState extends State<TetrisPage> {
+  static const int boardWidth = 10;
+  static const int boardHeight = 20;
+  static const double cellSize = 22.0;
 
-  const checkCollision = useCallback((piece, pos, boardState) => {
-    if (!piece) return true;
-    
-    for (let y = 0; y < piece.shape.length; y++) {
-      for (let x = 0; x < piece.shape[y].length; x++) {
-        if (piece.shape[y][x]) {
-          const newX = pos.x + x;
-          const newY = pos.y + y;
-          
-          if (newX < 0 || newX >= BOARD_WIDTH || newY >= BOARD_HEIGHT) {
-            return true;
-          }
-          if (newY >= 0 && boardState[newY][newX]) {
-            return true;
-          }
-        }
+  late List<List<int>> board;
+  Tetromino? current;
+  Point currentPos = Point(3, -2);
+  Timer? gravityTimer;
+  bool isPaused = false;
+  bool gameOver = false;
+  int score = 0;
+  int level = 1;
+  int linesClearedTotal = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    resetBoard();
+    startNewGame();
+  }
+
+  @override
+  void dispose() {
+    gravityTimer?.cancel();
+    super.dispose();
+  }
+
+  void resetBoard() {
+    board = List.generate(boardHeight, (_) => List.filled(boardWidth, 0));
+  }
+
+  void startNewGame() {
+    setState(() {
+      resetBoard();
+      score = 0;
+      level = 1;
+      linesClearedTotal = 0;
+      gameOver = false;
+      isPaused = false;
+    });
+    spawnPiece();
+    startGravity();
+  }
+
+  void startGravity() {
+    gravityTimer?.cancel();
+    gravityTimer = Timer.periodic(Duration(milliseconds: gravityDelay()), (_) {
+      if (!isPaused && !gameOver) moveDown();
+    });
+  }
+
+  int gravityDelay() => (800 - (level - 1) * 60).clamp(100, 800);
+
+  void spawnPiece() {
+    final t = Tetromino.random();
+    final startX = (boardWidth / 2).floor() - (t.shape[0].length / 2).floor();
+    final start = Point(startX, -t.spawnOffset);
+    if (checkCollision(t, start)) {
+      setState(() => gameOver = true);
+      gravityTimer?.cancel();
+      return;
+    }
+    setState(() {
+      current = t;
+      currentPos = start;
+    });
+  }
+
+  bool checkCollision(Tetromino? t, Point pos) {
+    if (t == null) return true;
+    for (int y = 0; y < t.shape.length; y++) {
+      for (int x = 0; x < t.shape[y].length; x++) {
+        if (t.shape[y][x] == 0) continue;
+        final bx = pos.x + x;
+        final by = pos.y + y;
+        if (bx < 0 || bx >= boardWidth || by >= boardHeight) return true;
+        if (by >= 0 && board[by][bx] != 0) return true;
       }
     }
     return false;
-  }, []);
+  }
 
-  const mergePiece = useCallback(() => {
-    const newBoard = board.map(row => [...row]);
-    
-    currentPiece.shape.forEach((row, y) => {
-      row.forEach((cell, x) => {
-        if (cell) {
-          const boardY = position.y + y;
-          const boardX = position.x + x;
-          if (boardY >= 0) {
-            newBoard[boardY][boardX] = currentPiece.type;
+  void lockPiece() {
+    final t = current;
+    if (t == null) return;
+    for (int y = 0; y < t.shape.length; y++) {
+      for (int x = 0; x < t.shape[y].length; x++) {
+        if (t.shape[y][x] == 0) continue;
+        final bx = currentPos.x + x;
+        final by = currentPos.y + y;
+        if (by >= 0 && by < boardHeight && bx >= 0 && bx < boardWidth) {
+          board[by][bx] = t.id;
+        }
+      }
+    }
+    clearLines();
+    spawnPiece();
+  }
+
+  void clearLines() {
+    int lines = 0;
+    board.removeWhere((row) {
+      final full = row.every((c) => c != 0);
+      if (full) lines++;
+      return full;
+    });
+    while (board.length < boardHeight) {
+      board.insert(0, List.filled(boardWidth, 0));
+    }
+    if (lines > 0) {
+      setState(() {
+        linesClearedTotal += lines;
+        score += lines * 100 * level;
+        if (linesClearedTotal ~/ 10 + 1 > level) level = (linesClearedTotal ~/ 10) + 1;
+      });
+      startGravity();
+    }
+  }
+
+  void moveDown() {
+    if (current == null) return;
+    final newPos = Point(currentPos.x, currentPos.y + 1);
+    if (checkCollision(current, newPos)) {
+      lockPiece();
+    } else {
+      setState(() => currentPos = newPos);
+    }
+  }
+
+  void moveHorizontal(int dx) {
+    if (current == null) return;
+    final newPos = Point(currentPos.x + dx, currentPos.y);
+    if (!checkCollision(current, newPos)) setState(() => currentPos = newPos);
+  }
+
+  void rotatePiece() {
+    if (current == null) return;
+    final rotated = current!.rotated();
+    if (!checkCollision(rotated, currentPos)) {
+      setState(() => current = rotated);
+    } else {
+      // simple wall kick: try left/right
+      if (!checkCollision(rotated, Point(currentPos.x - 1, currentPos.y))) {
+        setState(() => current = rotated);
+        setState(() => currentPos = Point(currentPos.x - 1, currentPos.y));
+      } else if (!checkCollision(rotated, Point(currentPos.x + 1, currentPos.y))) {
+        setState(() => current = rotated);
+        setState(() => currentPos = Point(currentPos.x + 1, currentPos.y));
+      }
+    }
+  }
+
+  void hardDrop() {
+    if (current == null) return;
+    var p = currentPos;
+    while (!checkCollision(current, Point(p.x, p.y + 1))) {
+      p = Point(p.x, p.y + 1);
+    }
+    setState(() => currentPos = p);
+    lockPiece();
+  }
+
+  void togglePause() {
+    setState(() {
+      isPaused = !isPaused;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final display = List.generate(boardHeight, (y) => List<int>.from(board[y]));
+    if (current != null) {
+      for (int y = 0; y < current!.shape.length; y++) {
+        for (int x = 0; x < current!.shape[y].length; x++) {
+          if (current!.shape[y][x] == 0) continue;
+          final bx = currentPos.x + x;
+          final by = currentPos.y + y;
+          if (by >= 0 && by < boardHeight && bx >= 0 && bx < boardWidth) {
+            display[by][bx] = current!.id;
           }
         }
-      });
-    });
-    
-    return newBoard;
-  }, [board, currentPiece, position]);
-
-  const clearLines = useCallback((boardState) => {
-    let linesCleared = 0;
-    const newBoard = boardState.filter(row => {
-      const isFull = row.every(cell => cell !== 0);
-      if (isFull) linesCleared++;
-      return !isFull;
-    });
-    
-    while (newBoard.length < BOARD_HEIGHT) {
-      newBoard.unshift(Array(BOARD_WIDTH).fill(0));
-    }
-    
-    if (linesCleared > 0) {
-      setScore(prev => prev + linesCleared * 100 * level);
-      if (score > 0 && score % 1000 < linesCleared * 100 * level) {
-        setLevel(prev => prev + 1);
       }
     }
-    
-    return newBoard;
-  }, [level, score]);
 
-  const spawnPiece = useCallback(() => {
-    const piece = getRandomPiece();
-    const startX = Math.floor(BOARD_WIDTH / 2) - Math.floor(piece.shape[0].length / 2);
-    const startPos = { x: startX, y: 0 };
-    
-    if (checkCollision(piece, startPos, board)) {
-      setGameOver(true);
-      return;
-    }
-    
-    setCurrentPiece(piece);
-    setPosition(startPos);
-  }, [board, checkCollision]);
-
-  const moveDown = useCallback(() => {
-    if (!currentPiece || isPaused || gameOver) return;
-    
-    const newPos = { ...position, y: position.y + 1 };
-    
-    if (checkCollision(currentPiece, newPos, board)) {
-      const merged = mergePiece();
-      const cleared = clearLines(merged);
-      setBoard(cleared);
-      spawnPiece();
-    } else {
-      setPosition(newPos);
-    }
-  }, [currentPiece, position, board, checkCollision, mergePiece, clearLines, spawnPiece, isPaused, gameOver]);
-
-  const moveHorizontal = (direction) => {
-    if (!currentPiece || isPaused || gameOver) return;
-    
-    const newPos = { ...position, x: position.x + direction };
-    if (!checkCollision(currentPiece, newPos, board)) {
-      setPosition(newPos);
-    }
-  };
-
-  const rotate = () => {
-    if (!currentPiece || isPaused || gameOver) return;
-    
-    const rotated = currentPiece.shape[0].map((_, i) =>
-      currentPiece.shape.map(row => row[i]).reverse()
+    return Scaffold(
+      appBar: AppBar(title: const Text('Tetris')),
+      body: SafeArea(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    color: const Color(0xFF0F1724),
+                    padding: const EdgeInsets.all(8),
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          width: boardWidth * cellSize,
+                          height: boardHeight * cellSize,
+                          child: CustomPaint(
+                            painter: BoardPainter(display, cellSize),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  SizedBox(
+                    width: 160,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text('Score: $score', style: const TextStyle(fontSize: 20)),
+                        const SizedBox(height: 8),
+                        Text('Level: $level', style: const TextStyle(fontSize: 18)),
+                        const SizedBox(height: 12),
+                        if (gameOver)
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            color: Colors.red.shade700,
+                            child: const Center(child: Text('GAME OVER')),
+                          ),
+                        if (isPaused && !gameOver)
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            color: Colors.yellow.shade700,
+                            child: const Center(child: Text('PAUSED')),
+                          ),
+                        const SizedBox(height: 12),
+                        ElevatedButton(
+                          onPressed: togglePause,
+                          child: Text(isPaused ? 'Resume' : 'Pause'),
+                        ),
+                        const SizedBox(height: 8),
+                        ElevatedButton(
+                          onPressed: startNewGame,
+                          child: const Text('New Game'),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('Controls', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ElevatedButton(onPressed: () => moveHorizontal(-1), child: const Text('←')),
+                            ElevatedButton(onPressed: () => moveHorizontal(1), child: const Text('→')),
+                            ElevatedButton(onPressed: rotatePiece, child: const Text('Rotate')),
+                            ElevatedButton(onPressed: moveDown, child: const Text('Down')),
+                            ElevatedButton(onPressed: hardDrop, child: const Text('Drop')),
+                          ],
+                        )
+                      ],
+                    ),
+                  )
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
-    
-    const rotatedPiece = { ...currentPiece, shape: rotated };
-    
-    if (!checkCollision(rotatedPiece, position, board)) {
-      setCurrentPiece(rotatedPiece);
-    }
-  };
+  }
+}
 
-  const hardDrop = () => {
-    if (!currentPiece || isPaused || gameOver) return;
-    
-    let newPos = { ...position };
-    while (!checkCollision(currentPiece, { ...newPos, y: newPos.y + 1 }, board)) {
-      newPos.y++;
-    }
-    setPosition(newPos);
-    moveDown();
-  };
+class BoardPainter extends CustomPainter {
+  final List<List<int>> board;
+  final double size;
+  BoardPainter(this.board, this.size);
 
-  useEffect(() => {
-    if (!currentPiece && !gameOver) {
-      spawnPiece();
-    }
-  }, [currentPiece, gameOver, spawnPiece]);
+  static const colors = [
+    Colors.transparent,
+    Color(0xFF00F0F0), // I
+    Color(0xFFF0F000), // O
+    Color(0xFFA000F0), // T
+    Color(0xFF00F000), // S
+    Color(0xFFF00000), // Z
+    Color(0xFF0000F0), // J
+    Color(0xFFF0A000), // L
+  ];
 
-  useEffect(() => {
-    const speed = Math.max(200, 1000 - (level - 1) * 100);
-    const interval = setInterval(moveDown, speed);
-    return () => clearInterval(interval);
-  }, [moveDown, level]);
-
-  useEffect(() => {
-    const handleKeyPress = (e) => {
-      if (gameOver) return;
-      
-      switch (e.key) {
-        case 'ArrowLeft':
-          moveHorizontal(-1);
-          break;
-        case 'ArrowRight':
-          moveHorizontal(1);
-          break;
-        case 'ArrowDown':
-          moveDown();
-          break;
-        case 'ArrowUp':
-        case ' ':
-          rotate();
-          break;
-        case 'Enter':
-          hardDrop();
-          break;
-        case 'p':
-          setIsPaused(prev => !prev);
-          break;
+  @override
+  void paint(Canvas canvas, Size canvasSize) {
+    final paint = Paint();
+    for (int y = 0; y < board.length; y++) {
+      for (int x = 0; x < board[y].length; x++) {
+        final val = board[y][x];
+        final rect = Rect.fromLTWH(x * size, y * size, size - 1, size - 1);
+        paint.color = colors[val.clamp(0, colors.length - 1)];
+        canvas.drawRect(rect, paint);
+        if (val != 0) {
+          paint.color = Colors.white.withOpacity(0.06);
+          canvas.drawRect(rect.deflate(2), paint);
+        }
       }
-    };
-    
-    window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [moveDown, gameOver]);
-
-  const renderBoard = () => {
-    const displayBoard = board.map(row => [...row]);
-    
-    if (currentPiece) {
-      currentPiece.shape.forEach((row, y) => {
-        row.forEach((cell, x) => {
-          if (cell) {
-            const boardY = position.y + y;
-            const boardX = position.x + x;
-            if (boardY >= 0 && boardY < BOARD_HEIGHT && boardX >= 0 && boardX < BOARD_WIDTH) {
-              displayBoard[boardY][boardX] = currentPiece.type;
-            }
-          }
-        });
-      });
     }
-    
-    return displayBoard;
-  };
+  }
 
-  const resetGame = () => {
-    setBoard(createEmptyBoard());
-    setCurrentPiece(null);
-    setScore(0);
-    setLevel(1);
-    setGameOver(false);
-    setIsPaused(false);
-  };
+  @override
+  bool shouldRepaint(covariant BoardPainter oldDelegate) => true;
+}
 
-  const displayBoard = renderBoard();
+class Tetromino {
+  final int id; // 1..7
+  final List<List<int>> shape;
+  final int spawnOffset;
 
-  return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 p-4">
-      <div className="flex flex-col md:flex-row gap-6 items-start">
-        <div className="bg-black p-4 rounded-lg shadow-2xl">
-          <div className="grid gap-px" style={{
-            gridTemplateColumns: `repeat(${BOARD_WIDTH}, ${CELL_SIZE}px)`,
-            backgroundColor: '#111'
-          }}>
-            {displayBoard.map((row, y) =>
-              row.map((cell, x) => (
-                <div
-                  key={`${y}-${x}`}
-                  className="transition-colors duration-100"
-                  style={{
-                    width: CELL_SIZE,
-                    height: CELL_SIZE,
-                    backgroundColor: cell ? COLORS[cell] : '#1a1a2e',
-                    border: cell ? '2px solid rgba(255,255,255,0.3)' : '1px solid #0f0f23',
-                    boxShadow: cell ? 'inset 0 0 10px rgba(255,255,255,0.2)' : 'none'
-                  }}
-                />
-              ))
-            )}
-          </div>
-        </div>
+  Tetromino(this.id, this.shape, {this.spawnOffset = 2});
 
-        <div className="bg-white rounded-lg shadow-2xl p-6 w-64">
-          <h1 className="text-3xl font-bold text-purple-900 mb-4">TETRIS</h1>
-          
-          <div className="mb-6 space-y-2">
-            <div className="flex justify-between items-center">
-              <span className="text-gray-700 font-semibold">Score:</span>
-              <span className="text-2xl font-bold text-purple-600">{score}</span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-gray-700 font-semibold">Level:</span>
-              <span className="text-xl font-bold text-blue-600">{level}</span>
-            </div>
-          </div>
+  Tetromino rotated() {
+    final h = shape.length;
+    final w = shape[0].length;
+    final List<List<int>> rotated = List.generate(w, (_) => List.filled(h, 0));
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        rotated[x][h - 1 - y] = shape[y][x];
+      }
+    }
+    return Tetromino(id, rotated, spawnOffset: spawnOffset);
+  }
 
-          {gameOver && (
-            <div className="mb-4 p-4 bg-red-100 border-2 border-red-500 rounded-lg">
-              <p className="text-red-700 font-bold text-center">GAME OVER!</p>
-            </div>
-          )}
+  static Tetromino random() {
+    final list = _all;
+    list.shuffle();
+    return list.first;
+  }
 
-          {isPaused && !gameOver && (
-            <div className="mb-4 p-4 bg-yellow-100 border-2 border-yellow-500 rounded-lg">
-              <p className="text-yellow-700 font-bold text-center">PAUSED</p>
-            </div>
-          )}
+  static final List<Tetromino> _all = [
+    Tetromino(1, [ [1,1,1,1] ], spawnOffset: 1), // I
+    Tetromino(2, [ [2,2],[2,2] ], spawnOffset: 2), // O
+    Tetromino(3, [ [0,3,0],[3,3,3] ]), // T
+    Tetromino(4, [ [0,4,4],[4,4,0] ]), // S
+    Tetromino(5, [ [5,5,0],[0,5,5] ]), // Z
+    Tetromino(6, [ [6,0,0],[6,6,6] ]), // J
+    Tetromino(7, [ [0,0,7],[7,7,7] ]), // L
+  ];
+}
 
-          <div className="space-y-2 mb-6">
-            {!gameOver && (
-              <button
-                onClick={() => setIsPaused(!isPaused)}
-                className="w-full py-2 px-4 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-semibold flex items-center justify-center gap-2 transition"
-              >
-                {isPaused ? <Play size={20} /> : <Pause size={20} />}
-                {isPaused ? 'Resume' : 'Pause'}
-              </button>
-            )}
-            <button
-              onClick={resetGame}
-              className="w-full py-2 px-4 bg-purple-500 hover:bg-purple-600 text-white rounded-lg font-semibold transition"
-            >
-              New Game
-            </button>
-          </div>
-
-          <div className="bg-gray-100 rounded-lg p-4 text-sm">
-            <h3 className="font-bold text-gray-800 mb-2">Controls:</h3>
-            <ul className="space-y-1 text-gray-700">
-              <li>← → Move</li>
-              <li>↓ Soft Drop</li>
-              <li>↑ / Space: Rotate</li>
-              <li>Enter: Hard Drop</li>
-              <li>P: Pause</li>
-            </ul>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default TetrisGame;
+class Point {
+  final int x;
+  final int y;
+  const Point(this.x, this.y);
+  Point copyWith({int? x, int? y}) => Point(x ?? this.x, y ?? this.y);
+  @override
+  String toString() => 'Point($x,$y)';
+}
